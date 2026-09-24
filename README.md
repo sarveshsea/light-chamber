@@ -2,13 +2,13 @@
 
 [Open the canvas](https://light-chamber.vercel.app)
 
-A fixed architectural light chamber with glowing interior panes and a suspended, wind-driven optical film. Move the light to watch its highlights and refraction travel across the folds. No panels, nodes, or visible labels.
+A straight-on technical light chamber with a white fixture, spectral rays, and a suspended, wind-driven optical film. Move the light to watch its highlights and refraction travel across the folds. No panels, nodes, or visible labels.
 
 Move the pointer to position the light. Scroll to adjust the light's depth. Touch and drag on mobile. Arrow keys move the light; `+` / `-` change depth. Escape or double-click resets the light. The chamber and camera stay fixed. Space pauses or resumes the wind.
 
 ## Optical math and attribution
 
-The film's wind field uses Stefan Gustavson and Ian McEwan's [PSRD noise](https://github.com/stegu/psrdnoise): rotating-gradient simplex noise with analytical partial derivatives. The vendored GLSL source is pinned to commit `419175a270862ce7ae692038fafafb42ec0427e9` and retains its MIT license. A copy is also shipped at `/THIRD_PARTY_NOTICES.txt`.
+The seven-ray spectrum converts OKLCH hue through OKLab to linear sRGB in the shader, keeping the hues evenly spaced as the rays separate. The film's wind field uses Stefan Gustavson and Ian McEwan's [PSRD noise](https://github.com/stegu/psrdnoise): rotating-gradient simplex noise with analytical partial derivatives. The vendored GLSL at `src/vendor/psrdnoise2.glsl` is pinned to commit `419175a270862ce7ae692038fafafb42ec0427e9` and retains its MIT license. A copy is also shipped at `/THIRD_PARTY_NOTICES.txt`.
 
 [Evan Wallace's WebGL Water](https://github.com/evanw/webgl-water/blob/master/renderer.js) was studied for its use of Snell refraction, Fresnel blending, and ray-footprint focusing. The chamber's optical shader is an original implementation; no water-demo source was copied.
 

@@ -26,7 +26,8 @@ try {
 }
 
 if (renderer) {
-  let current = {x: 0, y: 0, depth: 0};
+  const home = {x: -.72, y: -.62, depth: 0};
+  let current = {...home};
   let target = {...current};
   let frame = 0;
   let previous = performance.now();
@@ -106,7 +107,7 @@ if (renderer) {
       steer(target);
     } else if (event.key === 'Escape' || event.key === 'Home') {
       event.preventDefault();
-      steer({x: 0, y: 0, depth: 0});
+      steer(home);
     }
   });
   canvas.addEventListener('dblclick', () => steer({x: 0, y: 0, depth: 0}));
@@ -120,6 +121,6 @@ if (renderer) {
     if (!event.persisted) renderer.dispose();
   });
   window.addEventListener('pageshow', () => steer(target));
-  renderer.update({pointerX: 0, pointerY: 0, depth: 0, time: 0});
+  renderer.update({pointerX: home.x, pointerY: home.y, depth: home.depth, time: 0});
   steer(target);
 }

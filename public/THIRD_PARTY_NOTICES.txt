@@ -1,7 +1,7 @@
 PSRD noise
 https://github.com/stegu/psrdnoise
 Pinned source commit: 419175a270862ce7ae692038fafafb42ec0427e9
-Source: src/psrdnoise2.glsl
+Source: src/vendor/psrdnoise2.glsl
 
 //
 // psrdnoise2.glsl
