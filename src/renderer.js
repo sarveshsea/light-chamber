@@ -1,3 +1,5 @@
+import derivativeNoise from './vendor/psrdnoise2.glsl?raw';
+
 const vertexSource = `attribute vec2 position;
 void main(){gl_Position=vec4(position,0.0,1.0);}`;
 
@@ -6,117 +8,147 @@ precision highp float;
 uniform vec2 resolution;
 uniform vec2 pointer;
 uniform float depth;
-vec3 rotate(vec3 p){
- float yaw=pointer.x*.19-.12, pitch=pointer.y*.13+.075;
- p.xz=mat2(cos(yaw),-sin(yaw),sin(yaw),cos(yaw))*p.xz;
- p.yz=mat2(cos(pitch),-sin(pitch),sin(pitch),cos(pitch))*p.yz;
- return p;
+uniform float time;
+${derivativeNoise}
+const vec3 eye=vec3(2.35,1.55,6.7);
+const vec3 target=vec3(0.,0.,0.);
+const float bounds=1.22;
+vec3 lightPosition(){return vec3(clamp(-.25+pointer.x*.95,-1.1,1.1),clamp(.65+pointer.y*.6,-1.1,1.1),.60+depth*.48);}
+vec3 forward(){return normalize(target-eye);}
+vec3 right(){return normalize(cross(forward(),vec3(0.,1.,0.)));}
+vec3 up(){return cross(right(),forward());}
+vec2 project(vec3 p){vec3 d=p-eye;return vec2(dot(d,right()),dot(d,up()))/dot(d,forward())*1.58;}
+float segment(vec2 p,vec2 a,vec2 b){vec2 v=b-a;return length(p-a-v*clamp(dot(p-a,v)/dot(v,v),0.,1.));}
+vec3 spectrum(float phase){return .52+.48*cos(6.2831853*(phase+vec3(0.,.333,.667)));}
+// A broad wind mode plus differentiable simplex turbulence. Derivatives are
+// carried into Newton intersection and the optical surface normal.
+float film(vec2 q,out vec2 gradient){
+ vec2 g;
+ float n=psrdnoise(q*vec2(1.65,1.2)+vec2(-time*.11,time*.06),vec2(0.),time*.19,g);
+ float a=q.x*4.8+q.y*2.3-time*.78;
+ float b=q.y*5.5-q.x*1.9+time*.54;
+ float wind=.125*sin(a)+.062*sin(b);
+ gradient=.075*g*vec2(1.65,1.2)+.125*cos(a)*vec2(4.8,2.3)+.062*cos(b)*vec2(-1.9,5.5);
+ return .12+wind+.075*n;
 }
-vec2 project(vec3 p){p=rotate(p);return p.xy*1.06/(3.7-p.z);}
-float seg(vec2 p,vec2 a,vec2 b){vec2 v=b-a;return length(p-a-v*clamp(dot(p-a,v)/max(dot(v,v),.000001),0.,1.));}
-float line(vec2 p,vec2 a,vec2 b,float w){return 1.-smoothstep(w,w+1.3/min(resolution.x,resolution.y),seg(p,a,b));}
-vec3 spectral(float t){return clamp(vec3(1.5-abs(4.*t-3.),1.5-abs(4.*t-2.),1.5-abs(4.*t-1.)),0.,1.);}
-vec3 rail(vec3 color,vec2 p,vec3 a,vec3 b,float width,float bright){
- vec2 x=project(a),y=project(b),v=normalize(y-x),n=vec2(-v.y,v.x);
- float signedD=dot(p-x,n),d=seg(p,x,y);
- float aa=1.2/min(resolution.x,resolution.y);
+void planeHit(vec3 ro,vec3 rd,vec3 normal,float plane,inout float distance,inout vec3 hit,inout vec3 norm){
+ float divisor=dot(rd,normal);
+ if(abs(divisor)<.00001)return;
+ float t=(plane-dot(ro,normal))/divisor;
+ vec3 p=ro+rd*t;
+ if(t>.001&&t<distance&&max(max(abs(p.x),abs(p.y)),abs(p.z))<bounds+.001){distance=t;hit=p;norm=normal;}
+}
+vec3 wall(vec3 ro,vec3 rd){
+ float distance=100.;vec3 p=vec3(0.),normal=vec3(0.);
+ planeHit(ro,rd,vec3(1.,0.,0.),-bounds,distance,p,normal);
+ planeHit(ro,rd,vec3(-1.,0.,0.),-bounds,distance,p,normal);
+ planeHit(ro,rd,vec3(0.,1.,0.),-bounds,distance,p,normal);
+ planeHit(ro,rd,vec3(0.,-1.,0.),-bounds,distance,p,normal);
+ planeHit(ro,rd,vec3(0.,0.,1.),-bounds,distance,p,normal);
+ if(distance>99.)return vec3(.008,.009,.010);
+ vec3 l=lightPosition()-p;
+ float diffuse=max(dot(normalize(l),normal),0.);
+ float falloff=1./(1.+dot(l,l)*.27);
+ float hot=pow(diffuse,18.)*falloff;
+ vec3 e=vec3(bounds)-abs(p);
+ float seam=max(min(e.x,e.y),min(max(e.x,e.y),e.z));
+ float top=max(-normal.y,0.);
+ float seamLight=.22+.78*falloff;
+ vec3 color=vec3(.020,.022,.023)+vec3(.022,.025,.028)*diffuse;
+ color+=vec3(1.,.21,.025)*exp(-seam*12.)*.40*seamLight;
+ color+=vec3(1.,.60,.24)*exp(-seam*42.)*1.2*seamLight;
+ color+=vec3(1.,.91,.67)*exp(-seam*160.)*2.5*seamLight;
+ color+=vec3(1.,.43,.095)*hot*.90;
+ color+=vec3(1.,.78,.41)*pow(diffuse,55.)*falloff*2.3;
+ color+=top*vec3(1.,.29,.075)*(.24+falloff*.26);
+ color+=top*vec3(1.,.75,.42)*pow(diffuse,3.)*.75;
+ // Soft reflected caustic ribbons remain confined to the physical panes.
+ vec2 uv=abs(normal.y)>.5?p.xz:abs(normal.x)>.5?p.zy:p.xy;
+ vec2 g;float flow=film(uv*.73,g);
+ float caustic=pow(.5+.5*cos(uv.x*10.+uv.y*6.+flow*22.+lightPosition().x*2.-lightPosition().y),18.);
+ color+=vec3(1.,.39,.11)*caustic*.025*diffuse;
+ return color;
+}
+vec3 rail(vec3 color,vec2 screen,vec3 a,vec3 b,float width){
+ float d=segment(screen,project(a),project(b));
+ float aa=1.1/min(resolution.x,resolution.y);
  float mask=1.-smoothstep(width,width+aa,d);
- float bevel=smoothstep(-width,-width*.48,signedD)*(1.-smoothstep(width*.50,width,signedD));
- float groove=exp(-pow((signedD-width*.3)/max(width*.10,.0002),2.));
- vec3 metal=mix(vec3(.085,.091,.095),vec3(.30,.315,.32),bevel)*bright;
- metal+=vec3(.37,.39,.40)*exp(-pow((signedD+width*.69)/(width*.13),2.))*bright;
- metal-=groove*vec3(.075)*bright;
+ vec3 midpoint=(a+b)*.5;
+ float illumination=1./(1.+length(lightPosition()-midpoint));
+ vec3 metal=vec3(.045,.047,.047)+vec3(.11,.075,.041)*illumination;
  color=mix(color,metal,mask);
- color+=vec3(.095,.105,.11)*exp(-abs(d-width)*1200.)*bright;
+ color+=vec3(1.,.53,.24)*exp(-abs(d-width)*1200.)*.11*illumination;
  return color;
 }
 void main(){
- vec2 p=(gl_FragCoord.xy-resolution*.5)/min(resolution.x,resolution.y);
- vec3 color=vec3(.009,.011,.013);
- color+=vec3(.014,.018,.023)*exp(-length(p)*3.);
- float ground=exp(-pow((p.y+.36)/.055,2.)-pow(p.x/.38,2.));
- color+=ground*vec3(.013,.019,.024);
- // Every structural member shares the same perspective camera.
- for(int i=0;i<4;i++){
-  float sx=mod(float(i),2.)*2.-1.,sy=floor(float(i)/2.)*2.-1.;
-  color=rail(color,p,vec3(sx,sy,-.85),vec3(sx,sy,.85),.006, .72);
+ vec2 screen=(gl_FragCoord.xy-resolution*.5)/min(resolution.x,resolution.y);
+ vec3 ray=normalize(forward()*1.58+right()*screen.x+up()*screen.y);
+ vec3 color=wall(eye,ray);
+ // Ray/height-field intersection solved with analytical Newton iterations.
+ float t=(.12-eye.z)/ray.z;
+ vec2 grad=vec2(0.);
+ for(int i=0;i<5;i++){
+  vec3 point=eye+ray*t;
+  float height=film(point.xy,grad);
+  float derivative=ray.z-dot(grad,ray.xy);
+  float denominator=(derivative<0.?-1.:1.)*max(abs(derivative),.12);
+  t-=clamp((point.z-height)/denominator,-.6,.6);
  }
- color=rail(color,p,vec3(-1.,-1.,-.85),vec3(1.,-1.,-.85),.009,.70);
- color=rail(color,p,vec3(-1.,1.,-.85),vec3(1.,1.,-.85),.011,.95);
- color=rail(color,p,vec3(-1.,-1.,-.85),vec3(-1.,1.,-.85),.009,.85);
- color=rail(color,p,vec3(1.,-1.,-.85),vec3(1.,1.,-.85),.009,.65);
- for(int j=0;j<8;j++){
-  float z=mix(-.82,.82,float(j)/7.);
-  color=rail(color,p,vec3(-.98,-1.,z),vec3(.98,-1.,z),.0033,.52);
+ vec3 point=eye+ray*t;
+ float height=film(point.xy,grad);
+ // Sheet edges have the same deformation as the interior; no rigid card.
+ vec2 extent=vec2(.61,.85);
+ vec2 edge=extent-abs(point.xy);
+ float sheetDistance=min(edge.x,edge.y);
+ float aa=2.2/min(resolution.x,resolution.y);
+ float sheet=smoothstep(-aa,aa,sheetDistance);
+ sheet*=step(.001,t)*(1.-step(.015,abs(point.z-height)));
+ // Avoid drawing the sheet through the near chamber side panes.
+ float closest=100.;vec3 wh=vec3(0.),wn=vec3(0.);
+ planeHit(eye,ray,vec3(-1.,0.,0.),-bounds,closest,wh,wn);
+ planeHit(eye,ray,vec3(0.,-1.,0.),-bounds,closest,wh,wn);
+ sheet*=step(t,closest);
+ if(sheet>.0){
+  vec3 normal=normalize(vec3(-grad,1.));
+  vec3 light=normalize(lightPosition()-point);
+  vec3 view=normalize(eye-point);
+  float facing=clamp(dot(normal,view),0.,1.);
+  float fresnel=.045+.955*pow(1.-facing,5.);
+  // Separate wavelengths use distinct indices of refraction (Cauchy-like dispersion).
+  vec3 r=wall(point,refract(ray,normal,1./1.44));
+  vec3 g=wall(point,refract(ray,normal,1./1.48));
+  vec3 b=wall(point,refract(ray,normal,1./1.54));
+  vec3 transmission=vec3(r.r,g.g,b.b);
+  float ndl=max(dot(normal,light),0.);
+  vec3 halfVector=normalize(light+view);
+  float highlight=pow(max(dot(normal,halfVector),0.),95.);
+  float broad=pow(max(dot(normal,halfVector),0.),15.);
+  // Optical path difference through a wind-stretched nanometric coating.
+  float thickness=420.+height*550.+point.y*100.+sin(point.x*3.+time*.25)*55.;
+  float opticalPath=2.*1.46*thickness*sqrt(max(.1,1.-(1.-facing*facing)/(1.46*1.46)));
+  vec3 interference=.5+.5*cos(6.2831853*opticalPath/vec3(650.,510.,440.));
+  vec3 iridescence=pow(interference,vec3(7.));
+  float fold=pow(clamp(length(grad)*.9,0.,1.),1.4);
+  vec3 sheetColor=transmission*.82+vec3(.055,.064,.070)*(.55+ndl*.5);
+  sheetColor+=iridescence*(.035+fold*.18+broad*.28)*(.4+ndl*.6);
+  sheetColor+=vec3(.68,.75,.77)*broad*.25;
+  sheetColor+=vec3(1.,.90,.72)*highlight*3.2;
+  sheetColor+=wall(point,reflect(ray,normal))*fresnel*.6;
+  sheetColor+=vec3(.7,.79,.82)*exp(-max(sheetDistance,0.)*420.)*.3;
+  color=mix(color,sheetColor,sheet);
  }
- for(int j=0;j<4;j++){
-  float x=mix(-.88,.88,float(j)/3.);
-  color=rail(color,p,vec3(x,-.995,-.85),vec3(x,-.995,.85),.0021,.8);
- }
- // An optical pane moves in world space, including its focal depth.
- vec3 center=vec3(pointer.x*.24,pointer.y*.18,depth*.46);
- float tilt=pointer.x*.53+.14, lean=pointer.y*.35;
- vec3 U=vec3(cos(tilt),0.,sin(tilt))*.46;
- vec3 V=vec3(-sin(tilt)*sin(lean),cos(lean),cos(tilt)*sin(lean))*.58;
- vec2 c=project(center),u=project(center+U)-c,v=project(center+V)-c;
- vec2 q=p-c;
- float det=u.x*v.y-u.y*v.x;
- vec2 local=vec2(q.x*v.y-q.y*v.x,u.x*q.y-u.y*q.x)/det;
- vec2 box=abs(local)-vec2(.88);
- float glassD=(length(max(box,0.))+min(max(box.x,box.y),0.)-.12)*min(length(u),length(v));
- float pane=1.-smoothstep(-.0008,.0008,glassD);
- vec3 source=center+vec3(-1.48,-1.48,.40);
- vec3 direction=normalize(vec3(.92+pointer.x*.23,1.05+pointer.y*.23,-.24+depth*.28));
- vec3 normal=normalize(cross(U,V));
- vec3 beam=vec3(0.);
- vec2 start=project(source);
- float incident=seg(p,start,c);
- beam+=vec3(.72,.85,1.)*exp(-pow(incident/.0017,2.))*2.;
- beam+=vec3(.56,.69,.84)*exp(-incident/.009)*.32;
- beam+=vec3(.34,.45,.60)*exp(-incident/.035)*.055;
- for(int k=0;k<25;k++){
-  float t=float(k)/24.;
-  vec3 fan=normalize(direction+vec3(.63,-.42,.17)*(t-.5)*(.55+depth*.14)+normal*pointer.x*.055);
-  vec2 end=project(center+fan*2.8);
-  vec2 axis=end-c;
-  float along=clamp(dot(p-c,axis)/dot(axis,axis),0.,1.);
-  float d=seg(p,c,end);
-  float width=.0018+along*.009;
-  vec3 hue=spectral(t);
-  beam+=hue*exp(-pow(d/width,2.))*.115;
-  beam+=hue*exp(-d/(width+.022))*.012;
- }
- float hot=exp(-length(p-c)*110.);
- beam+=vec3(.6,.75,.9)*hot*.20;
- // Frost is restrained so the spectral path remains legible through the glass.
- vec3 frost=vec3(.045,.051,.057)+vec3(.025,.033,.043)*(.5+.5*local.y);
- color=mix(color,frost,pane*.72);
- color+=beam*mix(1.,.73,pane);
- color+=pane*vec3(.10,.12,.14)*exp(-pow((local.x+local.y*.34+.56)/.22,2.))*.17;
- float rim=exp(-abs(glassD)*1500.);
- color+=rim*(vec3(.12,.15,.18)+vec3(.19)*smoothstep(-.4,.8,local.y-local.x));
- color+=vec3(.055,.073,.090)*exp(-abs(glassD-.0018)*1400.);
- // Machined front frame is drawn over the optical volume.
- color=rail(color,p,vec3(-1.,-1.,.85),vec3(-1.,1.,.85),.012,1.05);
- color=rail(color,p,vec3(1.,-1.,.85),vec3(1.,1.,.85),.012,.86);
- color=rail(color,p,vec3(-1.,1.,.85),vec3(1.,1.,.85),.015,1.18);
- color=rail(color,p,vec3(-1.,-1.,.85),vec3(1.,-1.,.85),.013,.85);
- for(int k=0;k<4;k++){
-  vec3 pos=vec3(mod(float(k),2.)*2.-1.,floor(float(k)/2.)*2.-1.,.85);
-  vec2 bolt=project(pos),d=p-bolt;
-  float r=length(d);
-  color=mix(color,vec3(.025,.029,.031),1.-smoothstep(.0028,.0037,r));
-  color+=vec3(.28,.30,.31)*exp(-abs(r-.0036)*2300.);
-  color=mix(color,vec3(.10),line(p,bolt-vec2(.0015,.0005),bolt+vec2(.0015,.0005),.00025));
- }
- color*=1.-smoothstep(.34,.85,length(p))*.30;
- color=pow(1.-exp(-color*1.7),vec3(.92));
- // Screen-locked interleaved gradient dithering: no temporal grain or flicker.
+ // Fixed machined frame. Pointer appears only in lightPosition/illumination.
+
+ color=rail(color,screen,vec3(-1.,-1.,1.)*bounds,vec3(-1.,1.,1.)*bounds,.0045);
+ color=rail(color,screen,vec3(1.,-1.,1.)*bounds,vec3(1.,1.,1.)*bounds,.0045);
+ color=rail(color,screen,vec3(-1.,1.,1.)*bounds,vec3(1.,1.,1.)*bounds,.0045);
+ color=rail(color,screen,vec3(-1.,-1.,1.)*bounds,vec3(1.,-1.,1.)*bounds,.0045);
+ color=1.-exp(-color*1.42);
+ color=pow(color,vec3(.94));
  float dither=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
- color=floor(clamp(color,0.,1.)*63.+dither)/63.;
+ color=floor(clamp(color,0.,1.)*255.+dither)/255.;
  gl_FragColor=vec4(color,1.);
 }`;
-
 export function createRenderer(canvas) {
   const gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: true });
   if (!gl) throw new Error('This optical canvas requires a browser with WebGL enabled.');
@@ -145,8 +177,8 @@ export function createRenderer(canvas) {
   const position = gl.getAttribLocation(program, 'position');
   gl.enableVertexAttribArray(position);
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-  const uniforms = Object.fromEntries(['resolution', 'pointer', 'depth'].map(name => [name, gl.getUniformLocation(program, name)]));
-  let state = { pointerX: 0, pointerY: 0, depth: 0 };
+  const uniforms = Object.fromEntries(['resolution', 'pointer', 'depth', 'time'].map(name => [name, gl.getUniformLocation(program, name)]));
+  let state = { pointerX: 0, pointerY: 0, depth: 0, time: 0 };
   let disposed = false;
   function draw() {
     if (disposed || gl.isContextLost()) return;
@@ -158,6 +190,7 @@ export function createRenderer(canvas) {
     gl.uniform2f(uniforms.resolution, width, height);
     gl.uniform2f(uniforms.pointer, state.pointerX, state.pointerY);
     gl.uniform1f(uniforms.depth, state.depth);
+    gl.uniform1f(uniforms.time, state.time);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
   const observer = new ResizeObserver(draw);
@@ -165,7 +198,7 @@ export function createRenderer(canvas) {
   draw();
   return {
     update(next) {
-      const finite = Object.fromEntries(Object.entries(next).filter(([key, value]) => key in state && Number.isFinite(value)).map(([key, value]) => [key, Math.max(-1, Math.min(1, value))]));
+      const finite = Object.fromEntries(Object.entries(next).filter(([key, value]) => key in state && Number.isFinite(value)).map(([key, value]) => [key, key === 'time' ? Math.max(0, value) : Math.max(-1, Math.min(1, value))]));
       state = { ...state, ...finite };
       draw();
     },

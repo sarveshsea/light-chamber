@@ -6,13 +6,11 @@ const host = document.querySelector('#app');
 const canvas = document.createElement('canvas');
 canvas.id = 'canvas';
 canvas.tabIndex = 0;
-canvas.setAttribute('aria-label', 'Interactive light chamber. Move the pointer to orbit and refract light. Scroll to change depth. Arrow keys steer; plus and minus change depth; Escape resets.');
+canvas.setAttribute('aria-label', 'Interactive light chamber. Move the pointer to position the light inside the fixed chamber. Scroll to change light depth. Arrow keys steer; plus and minus change depth; Escape resets the light; Space pauses the wind.');
 host.append(canvas);
 
-let renderer;
-try {
-  renderer = createRenderer(canvas);
-} catch {
+function reportFailure(cause) {
+  console.error('Light chamber initialization failed', cause);
   const error = document.createElement('p');
   error.className = 'render-error';
   error.setAttribute('role', 'alert');
@@ -20,28 +18,63 @@ try {
   host.append(error);
 }
 
+let renderer;
+try {
+  renderer = createRenderer(canvas);
+} catch (cause) {
+  reportFailure(cause);
+}
+
 if (renderer) {
   let current = {x: 0, y: 0, depth: 0};
   let target = {...current};
   let frame = 0;
   let previous = performance.now();
+  let windTime = 0;
+  let windPaused = false;
+  let contextLost = false;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
   function tick(now) {
     frame = 0;
-    current = advance(current, target, Math.min(now - previous, 64), reduced.matches);
+    if (contextLost) return;
+    const elapsed = Math.min(now - previous, 64);
+    current = advance(current, target, elapsed, reduced.matches);
+    if (!reduced.matches && !windPaused) windTime += elapsed / 1000;
     previous = now;
-    renderer.update({pointerX: current.x, pointerY: current.y, depth: current.depth});
-    if (Object.keys(target).some(key => current[key] !== target[key])) frame = requestAnimationFrame(tick);
+    renderer.update({pointerX: current.x, pointerY: current.y, depth: current.depth, time: windTime});
+    if (!document.hidden && ((!reduced.matches && !windPaused) || Object.keys(target).some(key => current[key] !== target[key]))) {
+      frame = requestAnimationFrame(tick);
+    }
   }
 
   function steer(next) {
     target = {...target, ...next};
-    if (!frame && !document.hidden) {
+    if (!frame && !document.hidden && !contextLost) {
       previous = performance.now();
       frame = requestAnimationFrame(tick);
     }
   }
+
+  canvas.addEventListener('webglcontextlost', event => {
+    event.preventDefault();
+    contextLost = true;
+    cancelAnimationFrame(frame);
+    frame = 0;
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    renderer.dispose();
+    try {
+      renderer = createRenderer(canvas);
+      contextLost = false;
+      renderer.update({pointerX: current.x, pointerY: current.y, depth: current.depth, time: windTime});
+      steer(target);
+    } catch (cause) {
+      reportFailure(cause);
+    }
+  });
+
+  reduced.addEventListener('change', () => steer(target));
 
   canvas.addEventListener('pointermove', event => {
     steer(pointerPosition(event.clientX, event.clientY, innerWidth, innerHeight));
@@ -67,6 +100,10 @@ if (renderer) {
     } else if (['+', '=', '-'].includes(event.key)) {
       event.preventDefault();
       steer({depth: changeDepth(target.depth, event.key === '-' ? -100 : 100)});
+    } else if (event.code === 'Space') {
+      event.preventDefault();
+      windPaused = !windPaused;
+      steer(target);
     } else if (event.key === 'Escape' || event.key === 'Home') {
       event.preventDefault();
       steer({x: 0, y: 0, depth: 0});
@@ -83,5 +120,6 @@ if (renderer) {
     if (!event.persisted) renderer.dispose();
   });
   window.addEventListener('pageshow', () => steer(target));
-  renderer.update({pointerX: 0, pointerY: 0, depth: 0});
+  renderer.update({pointerX: 0, pointerY: 0, depth: 0, time: 0});
+  steer(target);
 }
