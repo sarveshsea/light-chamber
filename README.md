@@ -1,17 +1,10 @@
 # Light Chamber
 
-A small, open WebGL workbench for light and material experiments. A metallic container, a frosted optical surface, and a spectral beam — with no copy on the canvas.
+[Open the canvas](https://light-chamber.vercel.app)
 
-## Play
+An interactive study of a metallic chamber and spectral refraction. No panels, nodes, labels, or interface chrome. Procedural WebGL geometry with perspective, a cursor-steered optical surface, and fixed spatial dithering.
 
-- Shape the light with seven live controls.
-- Switch between Spectrum, Ice, Ember, or an empty canvas.
-- Drag nodes by their headers; use arrow keys when a header has focus.
-- Click a node's input port to bypass or reconnect that effect.
-- Hide the interface for a clean canvas; press Escape to restore it.
-- Export the current canvas as a PNG.
-
-The node map is a fixed material pipeline with movable, bypassable stages. It is not an arbitrary shader graph compiler.
+Move the pointer to orbit the chamber and steer refraction. Scroll to move the optical surface through depth. Touch and drag on mobile. Arrow keys steer, `+` / `-` change depth, and Escape or double-click resets.
 
 ## Develop
 
@@ -24,23 +17,20 @@ npm test
 npm run build
 ```
 
-For browser checks, start the dev server on port 5178, then run:
+Browser verification, with the dev server on port 5178:
 
 ```sh
 npx playwright install chromium
 node tests/browser.mjs
 ```
 
-Set `TEST_URL` to check a deployed build. Pure settings and pipeline logic has 100% line/branch/function coverage in the included unit tests. Browser checks cover shader changes, presets, node bypass, dragging, presentation mode, PNG download, and mobile layout; this is not a claim of full renderer coverage.
+Set `TEST_URL` to check production. Unit tests cover the coordinate mapping and motion model with 100% line/branch/function coverage. Browser checks cover the text-free canvas, spatial interaction, deterministic reset, responsive layout, reduced motion, and WebGL fallback.
 
-## Extend
+## Source
 
-`src/renderer.js` owns the GLSL shader and WebGL lifecycle. `createRenderer(canvas)` exposes `update(settings)`, `exportImage()`, and `dispose()`. Add uniforms here for new material studies.
+- `src/renderer.js` — procedural GLSL rendering and WebGL lifecycle.
+- `src/motion.js` — bounded spatial coordinates and frame-rate-independent smoothing.
+- `src/main.js` — pointer, touch, scroll, keyboard, and visibility lifecycle.
+- `src/style.css` — full-viewport canvas.
 
-`src/model.js` holds immutable settings, input limits, preset definitions, and the node-to-uniform mapping. `src/main.js` binds controls and node interactions. `src/style.css` contains the workbench surface tokens and responsive layout.
-
-The Empty preset disables the light, frame, and glass so the canvas is ready for a new experiment. Use the three toggles to bring components back independently. All processing stays in the browser. No analytics, account, or backend.
-
-## Rendering
-
-WebGL is required. Resolution is capped at 2× device pixel ratio. Reduced motion stops temporal animation. The container and glass are procedural screen-space shader geometry, not a ray-traced scene.
+The scene uses projected 3D geometry and artistic spectral refraction, not physically accurate ray tracing. All rendering stays in the browser. Resolution is capped at 2× device pixel ratio; rendering settles when interaction stops. Reduced-motion mode responds directly without trailing motion.

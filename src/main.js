@@ -1,50 +1,87 @@
 import './style.css';
-import {initialState,reduce,effectiveSettings,limits} from './model.js';
 import {createRenderer} from './renderer.js';
-const icons={box:'<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/>',sliders:'<path d="M4 7h7m4 0h5M4 17h3m4 0h9"/><circle cx="13" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',nodes:'<rect x="3" y="4" width="6" height="6" rx="1"/><rect x="15" y="14" width="6" height="6" rx="1"/><path d="M9 7h6v10"/>',eye:'<path d="M2 12s3-6 10-6 10 6 10 6-3 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/>',download:'<path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/>',play:'<path d="m9 5 10 7-10 7Z"/>',pause:'<path d="M9 5v14M15 5v14"/>',reset:'<path d="M4 10a8 8 0 1 1 1 8M4 4v6h6"/>',plus:'<path d="M12 5v14M5 12h14"/>',expand:'<path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/>',sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/>',diamond:'<path d="m12 3 9 9-9 9-9-9Z"/>'};
-const icon=n=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[n]||icons.diamond}</svg>`;
-const button=(id,n,label)=>`<button id="${id}" class="icon-button" aria-label="${label}" title="${label}">${icon(n)}</button>`;
-const ranges=[['intensity','Intensity',.01],['angle','Angle',1],['spread','Spread',.01],['dispersion','Dispersion',.01],['bloom','Bloom',.01],['grain','Grain',.01],['speed','Motion',.01]];
-let state=initialState();
-if(window.matchMedia('(max-width: 760px)').matches)document.body.classList.add('no-inspector');
-document.querySelector('#app').innerHTML=`<section class="viewport" aria-label="Shader canvas"><canvas id="canvas" aria-label="Live light chamber shader"></canvas><div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div></section>
-<nav class="toolbar panel" aria-label="Canvas tools"><div class="mark">${icon('box')}</div><div class="separator"></div>${button('toggle-inspector','sliders','Toggle controls')}${button('toggle-graph','nodes','Toggle node map')}<div class="separator"></div>${button('present','eye','Hide interface · Escape')}${button('export','download','Export PNG')}</nav>
-<div class="transport panel">${button('pause','pause','Pause animation')}${button('reset','reset','Reset scene')}<div class="separator"></div><button id="fit" class="scale-button" title="Toggle fullscreen">${icon('expand')}</button></div>
-<aside class="inspector panel" aria-label="Shader controls"><header><span class="panel-title">Light chamber</span><span class="status-light" aria-label="Live rendering"></span></header><div class="section-label">SCENE</div><div class="presets">${[['spectrum','Spectrum'],['ice','Ice'],['ember','Ember'],['empty','Empty']].map(([id,label])=>`<button class="preset ${id==='spectrum'?'selected':''}" data-preset="${id}"><span class="swatch ${id}"></span>${label}</button>`).join('')}</div><div class="divider"></div><div class="section-label">LIGHT & MATERIAL</div><div class="ranges">${ranges.map(([key,label,step])=>`<label class="range-row" for="${key}"><span>${label}</span><output id="${key}-value"></output><input id="${key}" type="range" min="${limits[key][0]}" max="${limits[key][1]}" step="${step}"></label>`).join('')}</div><div class="divider"></div><div class="switches">${[['enabled','Light source'],['frame','Container'],['glass','Glass surface']].map(([key,label])=>`<label class="switch-row"><span>${label}</span><input type="checkbox" id="${key}"><span class="switch"></span></label>`).join('')}</div><p id="notice" role="status" hidden></p></aside>
-<section class="graph panel" aria-label="Configurable node map"><header><span class="panel-title">Node map <span class="muted">/</span> <span class="subtle">Material pipeline</span></span><div class="graph-actions"><button id="arrange" title="Arrange nodes" aria-label="Arrange nodes">${icon('reset')}</button><button id="close-graph" aria-label="Close node map">×</button></div></header><div class="graph-scroll"><div class="graph-stage"><svg class="wires" aria-hidden="true"></svg>${[['source','Light source','sun','Emission','intensity'],['dispersion','Dispersion','diamond','Spectrum','dispersion'],['glass','Glass surface','box','Beam spread','spread'],['bloom','Bloom','sun','Diffusion','bloom']].map(([id,label,ico,sub,key],i)=>`<article class="node" data-node="${id}" style="left:${30+i*240}px;top:${i%2?62:30}px"><div class="node-heading" tabindex="0" aria-label="Move ${label} with arrow keys">${icon(ico)}<span>${label}</span><span class="node-index">0${i+1}</span></div><div class="node-body"><div class="node-detail"><span>${sub}</span><output data-node-value="${key}"></output></div><div class="node-meter ${id}"><i></i></div></div><button class="port input" data-port="${id}" aria-label="${label}: toggle connection" title="Connect / bypass ${label}"></button><span class="port output"></span></article>`).join('')}<div class="output-node" style="left:1000px;top:67px">${icon('eye')}<span>Output</span><span class="port input"></span></div></div></div></section><button id="restore" class="icon-button panel" aria-label="Show interface" title="Show interface · Escape">${icon('sliders')}</button>`;
+import {pointerPosition, advance, changeDepth} from './motion.js';
+
+const host = document.querySelector('#app');
+const canvas = document.createElement('canvas');
+canvas.id = 'canvas';
+canvas.tabIndex = 0;
+canvas.setAttribute('aria-label', 'Interactive light chamber. Move the pointer to orbit and refract light. Scroll to change depth. Arrow keys steer; plus and minus change depth; Escape resets.');
+host.append(canvas);
+
 let renderer;
-try{renderer=createRenderer(document.querySelector('#canvas'));}catch(error){notice(`Rendering unavailable: ${error.message}`);}
-function notice(text){const el=document.querySelector('#notice');el.hidden=false;el.textContent=text;}
-function dispatch(action){state=reduce(state,action);sync();}
-function sync(){
- renderer?.update(effectiveSettings(state));
- for(const [key] of ranges){document.getElementById(key).value=state[key];document.getElementById(`${key}-value`).textContent=key==='angle'?`${state[key]}°`:state[key].toFixed(2);document.getElementById(key).style.setProperty('--value',`${(state[key]-limits[key][0])/(limits[key][1]-limits[key][0])*100}%`);}
- for(const key of ['enabled','frame','glass'])document.getElementById(key).checked=state[key];
- document.querySelector('#pause').innerHTML=icon(state.paused?'play':'pause');document.querySelector('#pause').setAttribute('aria-label',state.paused?'Play animation':'Pause animation');
- document.querySelectorAll('[data-node]').forEach(el=>{const active=state.connections[el.dataset.node];el.classList.toggle('bypassed',!active);el.querySelector('button').setAttribute('aria-pressed',String(active));});
- document.querySelectorAll('[data-node-value]').forEach(el=>{el.textContent=state[el.dataset.nodeValue].toFixed(2);el.closest('.node-body').querySelector('i').style.width=`${state[el.dataset.nodeValue]/limits[el.dataset.nodeValue][1]*100}%`;});
- drawWires();
+try {
+  renderer = createRenderer(canvas);
+} catch {
+  const error = document.createElement('p');
+  error.className = 'render-error';
+  error.setAttribute('role', 'alert');
+  error.textContent = 'WebGL is unavailable. Open this canvas in a browser with hardware acceleration.';
+  host.append(error);
 }
-function drawWires(){const ids=['source','dispersion','glass','bloom'];const nodes=[...document.querySelectorAll('.node'),document.querySelector('.output-node')];document.querySelector('.wires').innerHTML=nodes.slice(0,-1).map((el,i)=>{const next=nodes[i+1];const x=el.offsetLeft+el.offsetWidth,y=el.offsetTop+el.offsetHeight/2,x2=next.offsetLeft,y2=next.offsetTop+next.offsetHeight/2;return `<path class="${state.connections[ids[i]]?'':'off'}" d="M${x} ${y} C${x+55} ${y},${x2-55} ${y2},${x2} ${y2}"/>`;}).join('');}
-for(const [key] of ranges)document.getElementById(key).addEventListener('input',e=>dispatch({type:'set',key,value:Number(e.target.value)}));
-for(const key of ['enabled','frame','glass'])document.getElementById(key).addEventListener('change',()=>dispatch({type:'toggle',key}));
-document.querySelectorAll('[data-preset]').forEach(el=>el.addEventListener('click',()=>{dispatch({type:'preset',name:el.dataset.preset});document.querySelectorAll('[data-preset]').forEach(p=>p.classList.toggle('selected',p===el));}));
-document.querySelectorAll('[data-port]').forEach(el=>el.addEventListener('click',()=>dispatch({type:'connection',node:el.dataset.port})));
-const togglePresentation=()=>document.body.classList.toggle('presentation');
-document.querySelector('#present').onclick=togglePresentation;document.querySelector('#restore').onclick=togglePresentation;
-document.querySelector('#toggle-inspector').onclick=()=>document.body.classList.toggle('no-inspector');
-document.querySelector('#toggle-graph').onclick=()=>{document.body.classList.toggle('no-graph');requestAnimationFrame(drawWires);};
-document.querySelector('#close-graph').onclick=()=>document.body.classList.add('no-graph');
-document.querySelector('#pause').onclick=()=>dispatch({type:'toggle',key:'paused'});
-document.querySelector('#reset').onclick=()=>{dispatch({type:'preset',name:'spectrum'});document.querySelector('[data-preset="spectrum"]').click();};
-document.querySelector('#fit').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{notice('Fullscreen is unavailable in this browser.');}};
-document.querySelector('#export').onclick=async()=>{try{const result=await renderer.exportImage();if(!result)throw new Error('No image');if(result instanceof Blob){const url=URL.createObjectURL(result);save(url);setTimeout(()=>URL.revokeObjectURL(url),1000);}else save(result);}catch{notice('Image export is unavailable. Try reloading the canvas.');}};
-function save(url){const a=document.createElement('a');a.href=url;a.download='light-chamber.png';a.click();}
-function arrange(){document.querySelectorAll('.node').forEach((el,i)=>{el.style.left=`${30+i*240}px`;el.style.top=`${i%2?62:30}px`;});drawWires();}
-document.querySelector('#arrange').onclick=arrange;
-document.querySelectorAll('.node-heading').forEach(handle=>{
- handle.addEventListener('pointerdown',e=>{if(e.button!==0)return;const node=handle.parentElement;const start={x:e.clientX,y:e.clientY,left:node.offsetLeft,top:node.offsetTop};handle.setPointerCapture(e.pointerId);handle.onpointermove=ev=>{node.style.left=`${Math.max(8,Math.min(790,start.left+ev.clientX-start.x))}px`;node.style.top=`${Math.max(8,Math.min(105,start.top+ev.clientY-start.y))}px`;drawWires();};handle.onpointerup=handle.onpointercancel=()=>{handle.onpointermove=null;};});
- handle.addEventListener('keydown',e=>{const delta={ArrowLeft:[-10,0],ArrowRight:[10,0],ArrowUp:[0,-10],ArrowDown:[0,10]}[e.key];if(!delta)return;e.preventDefault();const node=handle.parentElement;node.style.left=`${Math.max(8,Math.min(790,node.offsetLeft+delta[0]))}px`;node.style.top=`${Math.max(8,Math.min(105,node.offsetTop+delta[1]))}px`;drawWires();});
-});
-document.addEventListener('keydown',e=>{if(e.key==='Escape')document.body.classList.remove('presentation');});
-window.addEventListener('resize',drawWires);window.addEventListener('pagehide',event=>{if(!event.persisted)renderer?.dispose();});sync();
+
+if (renderer) {
+  let current = {x: 0, y: 0, depth: 0};
+  let target = {...current};
+  let frame = 0;
+  let previous = performance.now();
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+
+  function tick(now) {
+    frame = 0;
+    current = advance(current, target, Math.min(now - previous, 64), reduced.matches);
+    previous = now;
+    renderer.update({pointerX: current.x, pointerY: current.y, depth: current.depth});
+    if (Object.keys(target).some(key => current[key] !== target[key])) frame = requestAnimationFrame(tick);
+  }
+
+  function steer(next) {
+    target = {...target, ...next};
+    if (!frame && !document.hidden) {
+      previous = performance.now();
+      frame = requestAnimationFrame(tick);
+    }
+  }
+
+  canvas.addEventListener('pointermove', event => {
+    steer(pointerPosition(event.clientX, event.clientY, innerWidth, innerHeight));
+  });
+  canvas.addEventListener('pointerdown', event => {
+    canvas.focus({preventScroll: true});
+    canvas.setPointerCapture(event.pointerId);
+    steer(pointerPosition(event.clientX, event.clientY, innerWidth, innerHeight));
+  });
+  canvas.addEventListener('wheel', event => {
+    if (event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? innerHeight : 1;
+    steer({depth: changeDepth(target.depth, event.deltaY * unit)});
+  }, {passive: false});
+  canvas.addEventListener('keydown', event => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const arrows = {ArrowLeft: [-.12, 0], ArrowRight: [.12, 0], ArrowUp: [0, .12], ArrowDown: [0, -.12]};
+    if (arrows[event.key]) {
+      event.preventDefault();
+      const [x, y] = arrows[event.key];
+      steer({x: Math.max(-1, Math.min(1, target.x + x)), y: Math.max(-1, Math.min(1, target.y + y))});
+    } else if (['+', '=', '-'].includes(event.key)) {
+      event.preventDefault();
+      steer({depth: changeDepth(target.depth, event.key === '-' ? -100 : 100)});
+    } else if (event.key === 'Escape' || event.key === 'Home') {
+      event.preventDefault();
+      steer({x: 0, y: 0, depth: 0});
+    }
+  });
+  canvas.addEventListener('dblclick', () => steer({x: 0, y: 0, depth: 0}));
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { cancelAnimationFrame(frame); frame = 0; }
+    else steer(target);
+  });
+  window.addEventListener('pagehide', event => {
+    cancelAnimationFrame(frame);
+    frame = 0;
+    if (!event.persisted) renderer.dispose();
+  });
+  window.addEventListener('pageshow', () => steer(target));
+  renderer.update({pointerX: 0, pointerY: 0, depth: 0});
+}

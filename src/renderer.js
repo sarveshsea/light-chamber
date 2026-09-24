@@ -4,111 +4,122 @@ void main(){gl_Position=vec4(position,0.0,1.0);}`;
 const fragmentSource = `
 precision highp float;
 uniform vec2 resolution;
-uniform float time,intensity,spread,angle,bloom,dispersion,grain;
-uniform float showFrame,showGlass,enabled,palette;
-float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-float sdBox(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return min(max(q.x,q.y),0.)+length(max(q,0.))-r;}
-float segment(vec2 p,vec2 a,vec2 b){vec2 v=b-a;return length(p-a-v*clamp(dot(p-a,v)/dot(v,v),0.,1.));}
-float line(vec2 p,vec2 a,vec2 b,float width){return 1.-smoothstep(width,width+.0017,segment(p,a,b));}
-vec3 hue(float x){return .55+.45*cos(6.28318*(x+vec3(0.,.67,.33)));}
-vec3 spectrum(float k){vec3 c=hue(.77-k*.78);if(palette>.5&&palette<1.5)c=mix(vec3(.22,.42,1.),vec3(.55,1.,.94),k);if(palette>1.5)c=mix(vec3(1.,.055,.025),vec3(1.,.77,.22),k);return c;}
+uniform vec2 pointer;
+uniform float depth;
+vec3 rotate(vec3 p){
+ float yaw=pointer.x*.19-.12, pitch=pointer.y*.13+.075;
+ p.xz=mat2(cos(yaw),-sin(yaw),sin(yaw),cos(yaw))*p.xz;
+ p.yz=mat2(cos(pitch),-sin(pitch),sin(pitch),cos(pitch))*p.yz;
+ return p;
+}
+vec2 project(vec3 p){p=rotate(p);return p.xy*1.06/(3.7-p.z);}
+float seg(vec2 p,vec2 a,vec2 b){vec2 v=b-a;return length(p-a-v*clamp(dot(p-a,v)/max(dot(v,v),.000001),0.,1.));}
+float line(vec2 p,vec2 a,vec2 b,float w){return 1.-smoothstep(w,w+1.3/min(resolution.x,resolution.y),seg(p,a,b));}
+vec3 spectral(float t){return clamp(vec3(1.5-abs(4.*t-3.),1.5-abs(4.*t-2.),1.5-abs(4.*t-1.)),0.,1.);}
+vec3 rail(vec3 color,vec2 p,vec3 a,vec3 b,float width,float bright){
+ vec2 x=project(a),y=project(b),v=normalize(y-x),n=vec2(-v.y,v.x);
+ float signedD=dot(p-x,n),d=seg(p,x,y);
+ float aa=1.2/min(resolution.x,resolution.y);
+ float mask=1.-smoothstep(width,width+aa,d);
+ float bevel=smoothstep(-width,-width*.48,signedD)*(1.-smoothstep(width*.50,width,signedD));
+ float groove=exp(-pow((signedD-width*.3)/max(width*.10,.0002),2.));
+ vec3 metal=mix(vec3(.085,.091,.095),vec3(.30,.315,.32),bevel)*bright;
+ metal+=vec3(.37,.39,.40)*exp(-pow((signedD+width*.69)/(width*.13),2.))*bright;
+ metal-=groove*vec3(.075)*bright;
+ color=mix(color,metal,mask);
+ color+=vec3(.095,.105,.11)*exp(-abs(d-width)*1200.)*bright;
+ return color;
+}
 void main(){
-vec2 uv=(gl_FragCoord.xy-.5*resolution)/resolution.y;
-vec2 p=uv;
-float aspect=resolution.x/resolution.y;
-float scale=clamp(aspect/1.42,.55,1.15);
-p/=scale;
-vec3 col=vec3(.009,.012,.014);
-col+=vec3(.011,.017,.019)*exp(-length(p-vec2(.1,.05))*2.2);
-float a=radians(angle);
-vec2 dir=vec2(cos(a),sin(a));
-vec2 norm=vec2(-dir.y,dir.x);
-vec2 center=vec2(0.,.015);
-vec2 rayP=p-center;
-float along=dot(rayP,dir),across=dot(rayP,norm);
-float pulse=1.+.025*sin(time*.7);
-vec3 light=vec3(0.);
-// One white incident beam separates into an additive spectrum after the pane.
-float incoming=1.-smoothstep(-.08,.14,along);
-float incidentWidth=.0025+.009*max(-along,0.);
-light+=vec3(.79,.9,1.)*exp(-pow(across/incidentWidth,2.))*incoming*2.;
-light+=vec3(.48,.7,.8)*exp(-abs(across)/(.023+.03*bloom))*incoming*.24*bloom;
-for(int i=0;i<28;i++){
-float k=float(i)/27.;
-float slope=(k-.5)*(.018+dispersion*.31)*(.4+spread);
-float wave=.0013*sin(time*.2+k*12.);
-float offset=slope*max(along+.06,0.)+wave;
-float width=.0045+max(along,0.)*(.005+spread*.015);
-float d=across-offset;
-float mask=smoothstep(-.16,.035,along);
-vec3 c=spectrum(k);
-light+=c*exp(-pow(d/width,2.))*mask*.15;
-light+=c*exp(-abs(d)/(width+.035+.045*bloom))*mask*.015*bloom;
-}
-float sourcePower=intensity*enabled*pulse;
-light*=sourcePower;
-float glassD=sdBox(p-center,vec2(.155,.205),.032);
-float glassMask=1.-smoothstep(-.001,.001,glassD);
-if(showGlass>.5){
-// Diffused light behind a subtly bowed, brushed optical surface.
-float haze=exp(-pow(across/.072,2.))*exp(-abs(along)*1.9)*sourcePower;
-vec3 frost=vec3(.055,.067,.073)+vec3(.10,.13,.15)*haze;
-frost+=vec3(.019)*sin((p.x+p.y*.21)*1800.)*.2;
-col=mix(col,frost,glassMask*.65);
-light=mix(light,light*.67+vec3(.30,.36,.37)*haze*.38,glassMask);
-}
-col+=light;
-if(showGlass>.5){
-float rim=exp(-abs(glassD)*1000.);
-float edgeLight=.04+.20*pow(clamp(dot(normalize(p-center),normalize(vec2(-.8,1.))),0.,1.),3.);
-col+=rim*(vec3(.45,.56,.6)*edgeLight+light*.09);
-col+=glassMask*vec3(.11,.15,.17)*pow(max(0.,1.-abs(p.x+.12)*20.),12.)*.22;
-col+=vec3(.17,.19,.2)*line(p,vec2(-.108,.216),vec2(.105,.216),.0004);
-}
-if(showFrame>.5){
-vec2 outer=vec2(.535,.365),inner=vec2(.405,.262);
-// Recessed rear chamber and machined front perimeter.
-float rear=abs(sdBox(p,inner,.004));
-col+=vec3(.11,.135,.145)*(1.-smoothstep(.002,.005,rear));
-col+=vec3(.021,.026,.029)*(1.-smoothstep(.006,.014,rear));
-float front=abs(sdBox(p,outer,.012));
-float metal=1.-smoothstep(.008,.01,front);
-float machining=.96+.04*sin(p.y*340.+p.x*90.);
-col=mix(col,vec3(.092,.105,.111)*machining+light*.08,metal);
-col+=vec3(.19,.22,.235)*exp(-abs(front-.009)*1100.);
-for(int i=0;i<4;i++){
-vec2 s=vec2(mod(float(i),2.)*2.-1.,floor(float(i)/2.)*2.-1.);
-vec2 f=outer*s,b=inner*s;
-float rail=segment(p,f,b);
-col=mix(col,vec3(.092,.11,.12)+light*.10,(1.-smoothstep(.003,.006,rail))*.9);
-col+=vec3(.14,.17,.18)*line(p,f+vec2(.002,0.),b+vec2(.002,0.),.0007);
-float bolt=length(p-(outer-vec2(.003,.003))*s);
-col=mix(col,vec3(.025),1.-smoothstep(.004,.006,bolt));
-col+=vec3(.18)*exp(-abs(bolt-.005)*1700.)*.35;
-}
-// Thin floor slats establish depth while preserving an empty stage.
-for(int j=1;j<5;j++){
-float t=float(j)/5.;float y=mix(-.262,-.365,t*t);
-float x=mix(.405,.535,t*t);
-col+=vec3(.045,.057,.063)*line(p,vec2(-x,y),vec2(x,y),.0007);
-}
-float floorGlow=exp(-abs(p.y+.32)*22.)*exp(-pow((p.x+.27)/.30,2.));
-col+=vec3(.02,.035,.038)*floorGlow*sourcePower;
-}
-float vignette=1.-smoothstep(.4,1.1,length(uv))*.38;
-col*=vignette;
-col=1.-exp(-col*1.45);
-col+=((hash(gl_FragCoord.xy+fract(time)*70.)-.5)*grain*.035);
-gl_FragColor=vec4(max(col,0.),1.);
+ vec2 p=(gl_FragCoord.xy-resolution*.5)/min(resolution.x,resolution.y);
+ vec3 color=vec3(.009,.011,.013);
+ color+=vec3(.014,.018,.023)*exp(-length(p)*3.);
+ float ground=exp(-pow((p.y+.36)/.055,2.)-pow(p.x/.38,2.));
+ color+=ground*vec3(.013,.019,.024);
+ // Every structural member shares the same perspective camera.
+ for(int i=0;i<4;i++){
+  float sx=mod(float(i),2.)*2.-1.,sy=floor(float(i)/2.)*2.-1.;
+  color=rail(color,p,vec3(sx,sy,-.85),vec3(sx,sy,.85),.006, .72);
+ }
+ color=rail(color,p,vec3(-1.,-1.,-.85),vec3(1.,-1.,-.85),.009,.70);
+ color=rail(color,p,vec3(-1.,1.,-.85),vec3(1.,1.,-.85),.011,.95);
+ color=rail(color,p,vec3(-1.,-1.,-.85),vec3(-1.,1.,-.85),.009,.85);
+ color=rail(color,p,vec3(1.,-1.,-.85),vec3(1.,1.,-.85),.009,.65);
+ for(int j=0;j<8;j++){
+  float z=mix(-.82,.82,float(j)/7.);
+  color=rail(color,p,vec3(-.98,-1.,z),vec3(.98,-1.,z),.0033,.52);
+ }
+ for(int j=0;j<4;j++){
+  float x=mix(-.88,.88,float(j)/3.);
+  color=rail(color,p,vec3(x,-.995,-.85),vec3(x,-.995,.85),.0021,.8);
+ }
+ // An optical pane moves in world space, including its focal depth.
+ vec3 center=vec3(pointer.x*.24,pointer.y*.18,depth*.46);
+ float tilt=pointer.x*.53+.14, lean=pointer.y*.35;
+ vec3 U=vec3(cos(tilt),0.,sin(tilt))*.46;
+ vec3 V=vec3(-sin(tilt)*sin(lean),cos(lean),cos(tilt)*sin(lean))*.58;
+ vec2 c=project(center),u=project(center+U)-c,v=project(center+V)-c;
+ vec2 q=p-c;
+ float det=u.x*v.y-u.y*v.x;
+ vec2 local=vec2(q.x*v.y-q.y*v.x,u.x*q.y-u.y*q.x)/det;
+ vec2 box=abs(local)-vec2(.88);
+ float glassD=(length(max(box,0.))+min(max(box.x,box.y),0.)-.12)*min(length(u),length(v));
+ float pane=1.-smoothstep(-.0008,.0008,glassD);
+ vec3 source=center+vec3(-1.48,-1.48,.40);
+ vec3 direction=normalize(vec3(.92+pointer.x*.23,1.05+pointer.y*.23,-.24+depth*.28));
+ vec3 normal=normalize(cross(U,V));
+ vec3 beam=vec3(0.);
+ vec2 start=project(source);
+ float incident=seg(p,start,c);
+ beam+=vec3(.72,.85,1.)*exp(-pow(incident/.0017,2.))*2.;
+ beam+=vec3(.56,.69,.84)*exp(-incident/.009)*.32;
+ beam+=vec3(.34,.45,.60)*exp(-incident/.035)*.055;
+ for(int k=0;k<25;k++){
+  float t=float(k)/24.;
+  vec3 fan=normalize(direction+vec3(.63,-.42,.17)*(t-.5)*(.55+depth*.14)+normal*pointer.x*.055);
+  vec2 end=project(center+fan*2.8);
+  vec2 axis=end-c;
+  float along=clamp(dot(p-c,axis)/dot(axis,axis),0.,1.);
+  float d=seg(p,c,end);
+  float width=.0018+along*.009;
+  vec3 hue=spectral(t);
+  beam+=hue*exp(-pow(d/width,2.))*.115;
+  beam+=hue*exp(-d/(width+.022))*.012;
+ }
+ float hot=exp(-length(p-c)*110.);
+ beam+=vec3(.6,.75,.9)*hot*.20;
+ // Frost is restrained so the spectral path remains legible through the glass.
+ vec3 frost=vec3(.045,.051,.057)+vec3(.025,.033,.043)*(.5+.5*local.y);
+ color=mix(color,frost,pane*.72);
+ color+=beam*mix(1.,.73,pane);
+ color+=pane*vec3(.10,.12,.14)*exp(-pow((local.x+local.y*.34+.56)/.22,2.))*.17;
+ float rim=exp(-abs(glassD)*1500.);
+ color+=rim*(vec3(.12,.15,.18)+vec3(.19)*smoothstep(-.4,.8,local.y-local.x));
+ color+=vec3(.055,.073,.090)*exp(-abs(glassD-.0018)*1400.);
+ // Machined front frame is drawn over the optical volume.
+ color=rail(color,p,vec3(-1.,-1.,.85),vec3(-1.,1.,.85),.012,1.05);
+ color=rail(color,p,vec3(1.,-1.,.85),vec3(1.,1.,.85),.012,.86);
+ color=rail(color,p,vec3(-1.,1.,.85),vec3(1.,1.,.85),.015,1.18);
+ color=rail(color,p,vec3(-1.,-1.,.85),vec3(1.,-1.,.85),.013,.85);
+ for(int k=0;k<4;k++){
+  vec3 pos=vec3(mod(float(k),2.)*2.-1.,floor(float(k)/2.)*2.-1.,.85);
+  vec2 bolt=project(pos),d=p-bolt;
+  float r=length(d);
+  color=mix(color,vec3(.025,.029,.031),1.-smoothstep(.0028,.0037,r));
+  color+=vec3(.28,.30,.31)*exp(-abs(r-.0036)*2300.);
+  color=mix(color,vec3(.10),line(p,bolt-vec2(.0015,.0005),bolt+vec2(.0015,.0005),.00025));
+ }
+ color*=1.-smoothstep(.34,.85,length(p))*.30;
+ color=pow(1.-exp(-color*1.7),vec3(.92));
+ // Screen-locked interleaved gradient dithering: no temporal grain or flicker.
+ float dither=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
+ color=floor(clamp(color,0.,1.)*63.+dither)/63.;
+ gl_FragColor=vec4(color,1.);
 }`;
-
-const defaults = { intensity: 1, spread: .55, angle: 38, bloom: .65, dispersion: .65, grain: .2, speed: .25, frame: true, glass: true, enabled: true, palette: 'spectrum', paused: false };
 
 export function createRenderer(canvas) {
   const gl = canvas.getContext('webgl', { alpha: false, antialias: false, preserveDrawingBuffer: true });
-  if (!gl) {
-    throw new Error('Light preview unavailable: WebGL is not supported by this browser');
-  }
+  if (!gl) throw new Error('This optical canvas requires a browser with WebGL enabled.');
   function compile(type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -116,7 +127,7 @@ export function createRenderer(canvas) {
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
       const message = gl.getShaderInfoLog(shader);
       gl.deleteShader(shader);
-      throw new Error(`Light shader compilation failed: ${message}`);
+      throw new Error(`Unable to compile the optical canvas: ${message}`);
     }
     return shader;
   }
@@ -126,7 +137,7 @@ export function createRenderer(canvas) {
   gl.attachShader(program, vertex);
   gl.attachShader(program, fragment);
   gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error('Unable to link light renderer');
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error('Unable to initialize the optical canvas.');
   gl.useProgram(program);
   const buffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
@@ -134,62 +145,34 @@ export function createRenderer(canvas) {
   const position = gl.getAttribLocation(program, 'position');
   gl.enableVertexAttribArray(position);
   gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-  const names = ['resolution','time','intensity','spread','angle','bloom','dispersion','grain','showFrame','showGlass','enabled','palette'];
-  const uniforms = Object.fromEntries(names.map(name => [name, gl.getUniformLocation(program, name)]));
-  let settings = { ...defaults };
-  let animation = 0;
-  let elapsed = 0;
-  let previous = performance.now();
+  const uniforms = Object.fromEntries(['resolution', 'pointer', 'depth'].map(name => [name, gl.getUniformLocation(program, name)]));
+  let state = { pointerX: 0, pointerY: 0, depth: 0 };
   let disposed = false;
-  const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  function draw(now = performance.now()) {
+  function draw() {
     if (disposed || gl.isContextLost()) return;
-    if (!settings.paused && !motion.matches) elapsed += Math.min((now - previous) / 1000, .05) * settings.speed;
-    previous = now;
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
     const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
     if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
     gl.viewport(0, 0, width, height);
     gl.uniform2f(uniforms.resolution, width, height);
-    gl.uniform1f(uniforms.time, elapsed);
-    for (const key of ['intensity','spread','angle','bloom','dispersion','grain']) gl.uniform1f(uniforms[key], settings[key]);
-    gl.uniform1f(uniforms.showFrame, settings.frame ? 1 : 0);
-    gl.uniform1f(uniforms.showGlass, settings.glass ? 1 : 0);
-    gl.uniform1f(uniforms.enabled, settings.enabled ? 1 : 0);
-    gl.uniform1f(uniforms.palette, Math.max(0, ['spectrum','ice','ember'].indexOf(settings.palette)));
+    gl.uniform2f(uniforms.pointer, state.pointerX, state.pointerY);
+    gl.uniform1f(uniforms.depth, state.depth);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
-  function shouldAnimate() {
-    return !disposed && !document.hidden && !settings.paused && !motion.matches && settings.speed > 0;
-  }
-  function tick(now) {
-    animation = 0;
-    if (!shouldAnimate()) return;
-    draw(now);
-    animation = requestAnimationFrame(tick);
-  }
-  function refresh() {
-    cancelAnimationFrame(animation);
-    animation = 0;
-    previous = performance.now();
-    if (!disposed && !document.hidden) draw(previous);
-    if (shouldAnimate()) animation = requestAnimationFrame(tick);
-  }
-  const resizeObserver = new ResizeObserver(refresh);
-  resizeObserver.observe(canvas);
-  document.addEventListener('visibilitychange', refresh);
-  motion.addEventListener('change', refresh);
-  refresh();
+  const observer = new ResizeObserver(draw);
+  observer.observe(canvas);
+  draw();
   return {
-    update(next) { settings = { ...settings, ...next }; refresh(); },
+    update(next) {
+      const finite = Object.fromEntries(Object.entries(next).filter(([key, value]) => key in state && Number.isFinite(value)).map(([key, value]) => [key, Math.max(-1, Math.min(1, value))]));
+      state = { ...state, ...finite };
+      draw();
+    },
     exportImage() { draw(); return canvas.toDataURL('image/png'); },
     dispose() {
       disposed = true;
-      cancelAnimationFrame(animation);
-      resizeObserver.disconnect();
-      document.removeEventListener('visibilitychange', refresh);
-      motion.removeEventListener('change', refresh);
+      observer.disconnect();
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
       gl.deleteShader(vertex);
